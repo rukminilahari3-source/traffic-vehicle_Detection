@@ -1,42 +1,77 @@
 import cv2
-import numpy as np
-from sklearn.model_selection import train_test_split
+from ultralytics import YOLO
 
-# 1. LOAD DATASET
-def load_frames(video_path, resize=(224, 224)):
-    cap = cv2.VideoCapture(video_path)
-    frames = []
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame = cv2.resize(frame, resize)
-        frames.append(frame)
-    cap.release()
-    return np.array(frames)
+# ── Load YOLOv8 model ──
+model = YOLO('yolov8n.pt')  # downloads automatically first time
+print("YOLOv8 Model loaded successfully!")
 
-frames = load_frames("traffic.mp4")
+# ── Load Video ──
+cap = cv2.VideoCapture('traffic.mp4')
 
-# 2. NUMBER OF FRAMES & FEATURES
-print(f"Total Frames : {len(frames)}")          # 864
-print(f"Frame Shape  : {frames.shape[1:]}")     # (224, 224, 3)
-print(f"Full Shape   : {frames.shape}")         # (864, 224, 224, 3)
-print(f"Feature Dim  : {np.prod(frames.shape[1:])}")  # 150,528 per frame
+if not cap.isOpened():
+    print(" ERROR: Video file not found.")
+else:
+    print(" Video loaded successfully!")
 
-# 3. TRAIN / TEST SPLIT
-labels = np.zeros(len(frames), dtype=np.int64)  # replace with real labels
+# ── Get video info ──
+total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+fps          = cap.get(cv2.CAP_PROP_FPS)
+duration     = total_frames / fps
 
-X_train, X_test, y_train, y_test = train_test_split(
-    frames, labels, test_size=0.2, random_state=42
-)
+print(f" Total Frames : {total_frames}")
+print(f"FPS          : {fps}")
+print(f" Duration     : {duration:.2f} seconds")
+print("─" * 40)
 
-print(f"Train : {X_train.shape}")   # (691, 224, 224, 3)
-print(f"Test  : {X_test.shape}")    # (173, 224, 224, 3)
+# ── Vehicle classes in COCO dataset ──
+VEHICLE_CLASSES = {2: 'Car', 3: 'Motorcycle', 5: 'Bus', 7: 'Truck', 1: 'Bicycle'}
 
-# 4. DATA FORMAT — normalize to [0, 1]
-X_train = X_train.astype(np.float32) / 255.0
-X_test  = X_test.astype(np.float32)  / 255.0
+frame_id = 0
 
-print(f"dtype : {X_train.dtype}")
-print(f"range : [{X_train.min():.1f}, {X_train.max():.1f}]")
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    timestamp    = frame_id / fps
+    frame_resized = cv2.resize(frame, (640, 640))
+
+    # ── Run YOLOv8 detection ──
+    results = model(frame_resized, verbose=False)
+
+    vehicle_count = 0
+
+    for result in results:
+        for box in result.boxes:
+            class_id   = int(box.cls[0])
+            confidence = float(box.conf[0])
+
+            # ── Only process vehicle classes ──
+            if class_id in VEHICLE_CLASSES and confidence > 0.5:
+                vehicle_count += 1
+
+    # ── Display only the vehicle count on the frame ──
+    cv2.putText(frame_resized, f"Vehicles: {vehicle_count}",
+                (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+
+    # ── Show video window ──
+    cv2.imshow("Vehicle Count - YOLOv8", frame_resized)
+
+    # ── Print to terminal ──
+    print(f"Frame {frame_id} / {total_frames} | Time: {timestamp:.2f}s | Vehicles: {vehicle_count}")
+
+    # ── Press Q to quit ──
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+    frame_id += 1
+
+cap.release()
+cv2.destroyAllWindows()
+
+print("─" * 40)
+print(f"Total Frames Counted  : {frame_id}")
+print(f" Total Frames in Video : {total_frames}")
+print(f"  Total Duration        : {duration:.2f} seconds")
+print("Done.")
